@@ -1,24 +1,25 @@
-# Use the official DITA-OT image
 FROM ghcr.io/dita-ot/dita-ot:4.2
 
-# Switch to root to install Python
 USER root
-RUN apt-get update && apt-get install -y python3 python3-pip
 
+# Install dependencies
+RUN apt-get update && apt-get install -y python3 python3-pip unzip && rm -rf /var/lib/apt/lists/*
 
-# Set working directory
 WORKDIR /app
 
-# Copy requirements and install
+# Install Python requirements
 COPY requirements.txt .
 RUN pip3 install --no-cache-dir -r requirements.txt
 
-# Copy your Python API script
+# Copy your code
 COPY main.py .
 
-# Railway provides a PORT environment variable automatically
+# IMPORTANT: Reset the entrypoint so it doesn't try to run 'dita --host'
+ENTRYPOINT []
+
+# Railway/Cloud Run environment setup
 ENV PORT 8080
 EXPOSE 8080
 
-# Start the Python web server
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+# Use the full path to uvicorn to ensure it's found
+CMD ["python3", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
