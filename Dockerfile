@@ -5,12 +5,13 @@ FROM ghcr.io/dita-ot/dita-ot:4.2
 USER root
 RUN apt-get update && apt-get install -y python3 python3-pip
 
+
 # Set working directory
 WORKDIR /app
 
 # Copy requirements and install
 COPY requirements.txt .
-RUN pip3 install --no-cache-dir -r requirements.txt --break-system-packages
+RUN pip3 install --no-cache-dir -r requirements.txt
 
 # Copy your Python API script
 COPY main.py .
