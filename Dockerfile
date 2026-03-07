@@ -1,25 +1,42 @@
-FROM ghcr.io/dita-ot/dita-ot:4.2
+FROM eclipse-temurin:17-jdk-alpine AS base
 
-USER root
+RUN apk add --no-cache \
+    nodejs \
+    npm \
+    curl \
+    unzip \
+    zip \
+    bash \
+    ca-certificates
 
-# Install dependencies
-RUN apt-get update && apt-get install -y python3 python3-pip unzip && rm -rf /var/lib/apt/lists/*
+ARG DITA_OT_VERSION=4.2.4
+ENV DITA_OT_VERSION=${DITA_OT_VERSION}
+ENV DITA_OT_HOME=/opt/dita-ot
+
+RUN curl -fsSL \
+    "https://github.com/dita-ot/dita-ot/releases/download/${DITA_OT_VERSION}/dita-ot-${DITA_OT_VERSION}.zip\" \
+    -o /tmp/dita-ot.zip \
+    && unzip -q /tmp/dita-ot.zip -d /opt \
+    && mv /opt/dita-ot-${DITA_OT_VERSION} ${DITA_OT_HOME} \
+    && chmod +x ${DITA_OT_HOME}/bin/dita \
+    && rm /tmp/dita-ot.zip
+
+RUN addgroup -S ditaworker && adduser -S -G ditaworker ditaworker
 
 WORKDIR /app
+COPY package.json package-lock.json* ./
+RUN npm ci --omit=dev
 
-# Install Python requirements
-COPY requirements.txt .
-RUN pip3 install --no-cache-dir -r requirements.txt
+COPY server.js ./
 
-# Copy your code
-COPY main.py .
+RUN chown -R ditaworker:ditaworker /app
+RUN mkdir -p /tmp/dita-jobs && chown ditaworker:ditaworker /tmp/dita-jobs
 
-# IMPORTANT: Reset the entrypoint so it doesn't try to run 'dita --host'
-ENTRYPOINT []
+USER ditaworker
 
-# Railway/Cloud Run environment setup
-ENV PORT 8080
-EXPOSE 8080
+EXPOSE 3000
 
-# Use the full path to uvicorn to ensure it's found
-CMD ["python3", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+HEALTHCHECK --interval=15s --timeout=5s --start-period=20s --retries=3 \
+    CMD curl -f http://localhost:3000/health || exit 1
+
+CMD ["node", "server.js"]
