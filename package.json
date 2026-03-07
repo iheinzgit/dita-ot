@@ -1,0 +1,15 @@
+{
+  "name": "dita-ot-worker",
+  "version": "1.0.0",
+  "description": "Secure DITA-OT conversion worker service for Railway",
+  "private": true,
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "busboy": "^1.6.0"
+  }
+}
