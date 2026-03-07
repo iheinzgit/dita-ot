@@ -123,6 +123,149 @@ async function runDitaOt(mapPath, format, outputDir, ditavalPath) {
   });
 }
 
+async function streamFileToUrl(filePath, uploadUrl, contentType) {
+  const stat = await fsp.stat(filePath);
+  const fileStream = fs.createReadStream(filePath);
+  const response = await fetch(uploadUrl, {
+    method: 'PUT',
+    headers: {
+      'Content-Type': contentType,
+      'Content-Length': String(stat.size),
+    },
+    body: fileStream,
+    duplex: 'half',
+  });
+  if (!response.ok) {
+    const text = await response.text();
+    throw new Error(`Upload failed (${response.status}): ${text.slice(0, 500)}`);
+  }
+  return stat.size;
+}
+
+async function handleConvertAndUpload(req, res) {
+  if (!checkAuth(req, res)) return;
+
+  if (activeJobs >= MAX_CONCURRENT_JOBS) {
+    return sendJson(res, 503, { error: 'Too many concurrent jobs. Try again shortly.' });
+  }
+
+  const query = parseQuery(req.url);
+  const format = (query.format || '').toLowerCase();
+  const ditavalParam = query.ditaval || '';
+  const uploadUrl = query.upload_url ? decodeURIComponent(query.upload_url) : '';
+  const uploadPath = query.upload_path ? decodeURIComponent(query.upload_path) : '';
+
+  if (!ALLOWED_FORMATS.has(format)) {
+    return sendJson(res, 400, { error: `Invalid format. Allowed: ${[...ALLOWED_FORMATS].join(', ')}` });
+  }
+  if (!uploadUrl) {
+    return sendJson(res, 400, { error: 'upload_url query parameter is required' });
+  }
+  if (ditavalParam && !/^[\w.\-]+$/.test(ditavalParam)) {
+    return sendJson(res, 400, { error: 'Invalid ditaval filename' });
+  }
+
+  activeJobs++;
+  const jobId = randomUUID();
+  const jobDir = path.join(JOBS_DIR, jobId);
+  const srcDir = path.join(jobDir, 'src');
+  const outDir = path.join(jobDir, 'out');
+
+  try {
+    await fsp.mkdir(srcDir, { recursive: true });
+    await fsp.mkdir(outDir, { recursive: true });
+
+    let zipBuffer;
+    try {
+      zipBuffer = await readUploadedZip(req);
+    } catch (err) {
+      return sendJson(res, 400, { error: 'Failed to read uploaded file: ' + err.message });
+    }
+
+    if (!zipBuffer || zipBuffer.length === 0) {
+      return sendJson(res, 400, { error: 'No file uploaded' });
+    }
+
+    await extractZip(zipBuffer, srcDir);
+
+    const mapPath = path.join(srcDir, 'map.ditamap');
+    try {
+      await fsp.access(mapPath);
+    } catch {
+      return sendJson(res, 400, { error: 'ZIP must contain a map.ditamap at the root' });
+    }
+
+    let ditavalPath = null;
+    if (ditavalParam) {
+      const candidate = path.join(srcDir, path.basename(ditavalParam));
+      if (!candidate.startsWith(srcDir + path.sep)) {
+        return sendJson(res, 400, { error: 'Invalid ditaval path' });
+      }
+      try {
+        await fsp.access(candidate);
+        ditavalPath = candidate;
+      } catch {
+        return sendJson(res, 400, { error: `Ditaval file not found in ZIP: ${ditavalParam}` });
+      }
+    }
+
+    await runDitaOt(mapPath, format, outDir, ditavalPath);
+
+    const outFiles = await fsp.readdir(outDir);
+    if (outFiles.length === 0) {
+      return sendJson(res, 500, { error: 'DITA-OT produced no output files' });
+    }
+
+    let outputFilePath;
+    let outputMime;
+    let needsCleanup = false;
+
+    if (format === 'pdf') {
+      const pdfFiles = outFiles.filter(f => f.toLowerCase().endsWith('.pdf'));
+      if (pdfFiles.length === 1) {
+        outputFilePath = path.join(outDir, pdfFiles[0]);
+        outputMime = 'application/pdf';
+      }
+    }
+
+    if (!outputFilePath && format === 'epub') {
+      const epubFiles = outFiles.filter(f => f.toLowerCase().endsWith('.epub'));
+      if (epubFiles.length === 1) {
+        outputFilePath = path.join(outDir, epubFiles[0]);
+        outputMime = 'application/epub+zip';
+      }
+    }
+
+    if (!outputFilePath) {
+      const resultZipPath = path.join(jobDir, 'result.zip');
+      await zipDirectory(outDir, resultZipPath);
+      outputFilePath = resultZipPath;
+      outputMime = 'application/zip';
+      needsCleanup = true;
+    }
+
+    const bytes = await streamFileToUrl(outputFilePath, uploadUrl, outputMime);
+
+    sendJson(res, 200, {
+      success: true,
+      storage_path: uploadPath,
+      bytes,
+      format,
+      mime: outputMime,
+    });
+
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[job:${jobId}] Error:`, msg);
+    if (!res.headersSent) {
+      sendJson(res, 500, { error: msg });
+    }
+  } finally {
+    activeJobs--;
+    fsp.rm(jobDir, { recursive: true, force: true }).catch(() => {});
+  }
+}
+
 async function handleConvert(req, res) {
   if (!checkAuth(req, res)) return;
 
@@ -252,6 +395,10 @@ const server = http.createServer((req, res) => {
 
   if (url === '/convert' && req.method === 'POST') {
     return handleConvert(req, res);
+  }
+
+  if (url === '/convert-and-upload' && req.method === 'POST') {
+    return handleConvertAndUpload(req, res);
   }
 
   sendJson(res, 404, { error: 'Not found' });
