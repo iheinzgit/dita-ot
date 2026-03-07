@@ -14,7 +14,7 @@ ENV DITA_OT_VERSION=${DITA_OT_VERSION}
 ENV DITA_OT_HOME=/opt/dita-ot
 
 RUN curl -fsSL \
-    "https://github.com/dita-ot/dita-ot/releases/download/${DITA_OT_VERSION}/dita-ot-${DITA_OT_VERSION}.zip\" \
+    "https://github.com/dita-ot/dita-ot/releases/download/${DITA_OT_VERSION}/dita-ot-${DITA_OT_VERSION}.zip" \
     -o /tmp/dita-ot.zip \
     && unzip -q /tmp/dita-ot.zip -d /opt \
     && mv /opt/dita-ot-${DITA_OT_VERSION} ${DITA_OT_HOME} \
